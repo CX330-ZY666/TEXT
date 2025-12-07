@@ -72,11 +72,19 @@ function LocalVoiceRecorder({ onTranscribeComplete }) {
 
       recognition.onerror = (event) => {
         console.error('语音识别错误:', event.error);
-        let errorMsg = '语音识别失败';
+        
+        // no-speech 错误不应该停止识别，只是提示
         if (event.error === 'no-speech') {
-          errorMsg = '未检测到语音，请重试';
-        } else if (event.error === 'network') {
+          setError('正在等待语音输入...');
+          // 不设置 setIsListening(false)，让它继续监听
+          return;
+        }
+        
+        let errorMsg = '语音识别失败';
+        if (event.error === 'network') {
           errorMsg = '网络错误，请检查网络连接';
+        } else if (event.error === 'aborted') {
+          errorMsg = '识别被中止';
         }
         setError(errorMsg);
         setIsListening(false);
@@ -97,8 +105,13 @@ function LocalVoiceRecorder({ onTranscribeComplete }) {
 
   const stopListening = () => {
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.warn('停止识别失败:', e);
+      }
       setIsListening(false);
+      recognitionRef.current = null;
     }
   };
 

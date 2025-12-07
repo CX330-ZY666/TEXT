@@ -1,10 +1,21 @@
 // src/components/Layout.jsx
-import { Link, Outlet, useNavigate } from 'react-router-dom';
+import { Link, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useState, useEffect } from 'react';
+import './Layout.css';
 
 function Layout() {
   const { token, user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [isTransitioning, setIsTransitioning] = useState(false);
+
+  // 路由变化时触发动画
+  useEffect(() => {
+    setIsTransitioning(true);
+    const timer = setTimeout(() => setIsTransitioning(false), 50);
+    return () => clearTimeout(timer);
+  }, [location.pathname]);
 
   const handleLogout = () => {
     logout();
@@ -13,45 +24,44 @@ function Layout() {
 
   return (
     <div className="app-layout">
-      <nav style={{ background: '#eee', padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
+      <nav className="nav-bar">
+        <div className="nav-links">
           {token ? (
-        <Link to="/" style={{ marginRight: '1rem' }}>主页</Link>
+            <>
+              <Link to="/" className={`nav-link ${location.pathname === '/' ? 'active' : ''}`}>🏠 主页</Link>
+              <Link to="/agent" className={`nav-link nav-link-ai ${location.pathname === '/agent' ? 'active' : ''}`}>🤖 AI助手</Link>
+              <Link to="/graph" className={`nav-link nav-link-graph ${location.pathname === '/graph' ? 'active' : ''}`}>🔗 知识图谱</Link>
+              <Link to="/3d-world" className={`nav-link nav-link-3d ${location.pathname === '/3d-world' ? 'active' : ''}`}>🌐 3D 视界</Link>
+              <Link to="/knowledge-universe" className={`nav-link nav-link-universe ${location.pathname === '/knowledge-universe' ? 'active' : ''}`}>✨ 知识宇宙</Link>
+            </>
           ) : (
             <>
-        <Link to="/login" style={{ marginRight: '1rem' }}>登录</Link>
-        <Link to="/register">注册</Link>
+              <Link to="/login" className="nav-link">登录</Link>
+              <Link to="/register" className="nav-link">注册</Link>
             </>
           )}
         </div>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+        <div className="nav-user">
           {token && (
-            <span style={{ fontSize: 14, color: '#333' }}>
+            <span className="user-welcome">
               {user?.email || user?.username || user?.userId
                 ? `欢迎，${user?.email || user?.username || `用户#${user?.userId}`}`
                 : '欢迎，正在加载用户信息'}
             </span>
           )}
-          <span style={{
-            padding: '2px 8px',
-            borderRadius: '999px',
-            fontSize: '12px',
-            color: token ? '#0a5' : '#666',
-            background: token ? 'rgba(0,170,85,0.12)' : 'rgba(0,0,0,0.06)',
-            border: token ? '1px solid rgba(0,170,85,0.35)' : '1px solid rgba(0,0,0,0.08)'
-          }}>
+          <span className={`status-badge ${token ? 'status-online' : 'status-offline'}`}>
+            <span className="status-dot"></span>
             {token ? '已登录' : '未登录'}
           </span>
           {token && (
-            <button onClick={handleLogout} style={{ background: 'none', border: '1px solid #c9c9c9', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
+            <button onClick={handleLogout} className="logout-btn">
               退出登录
             </button>
           )}
         </div>
       </nav>
       
-      <main style={{ padding: '1rem' }}>
-        {/* Outlet 是一个占位符，子路由匹配的组件会在这里显示 */}
+      <main className={`main-area ${isTransitioning ? '' : 'fade-in'}`}>
         <Outlet /> 
       </main>
     </div>

@@ -1,315 +1,278 @@
 // src/pages/FeynmanRecordPage.jsx
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import apiClient from '../api/axios';
-
-// 异步下载 RecordRTC
-const getRecordRTC = async () => {
-  try {
-    const RecordRTC = (await import('recordrtc')).default;
-    return RecordRTC;
-  } catch (err) {
-    console.error('RecordRTC 加载失败:', err);
-    throw new Error('RecordRTC 加载失败：' + err.message);
-  }
-};
+import VoiceRecorder from '../components/VoiceRecorder';
+import './FeynmanRecordPage.css';
 
 function FeynmanRecordPage() {
   const { id } = useParams();
   const [kpTitle, setKpTitle] = useState('');
-  const [transcribedText, setTranscribedText] = useState('');
-  const [isUploading, setIsUploading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
-  const [seconds, setSeconds] = useState(0);
 
-  const timerRef = useRef(null);
-  const volumeRef = useRef(0);
-  const [volume, setVolume] = useState(0);
-  const audioCtxRef = useRef(null);
-  const analyserRef = useRef(null);
-  const rafRef = useRef(null);
-  const streamRef = useRef(null);
+  // 此状态用于从子组件接收转录文本
+  const [transcribedText, setTranscribedText] = useState('');
+  // 记录本次创建的 Attempt ID，用于回写AI结果
+  const [attemptId, setAttemptId] = useState(null);
+  
+  // 🆕 AI评价相关状态
+  const [aiFeedback, setAiFeedback] = useState(null);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [evaluationError, setEvaluationError] = useState('');
+  const [originalContent, setOriginalContent] = useState(''); // 保存原始知识点内容
+
+  // 分开保存的选项与状态
+  const [saveTranscribed, setSaveTranscribed] = useState(true);
+  const [savePolished, setSavePolished] = useState(true);
+  const [isSavingAttempt, setIsSavingAttempt] = useState(false);
+  const [saveAttemptMsg, setSaveAttemptMsg] = useState('');
 
   useEffect(() => {
     const fetchKpTitle = async () => {
       try {
         const response = await apiClient.get(`/knowledge-points/${id}`);
         setKpTitle(response.data?.title || '');
+        setOriginalContent(response.data?.content || ''); // 🆕 同时保存原始内容
       } catch (err) {
-        console.warn('加载知识点标题失败:', err);
-        setLoadError('加载知识点标题失败');
+        console.warn('加载知识点失败:', err);
+        setLoadError('加载知识点失败');
       }
     };
     fetchKpTitle();
   }, [id]);
 
-  /** 上传 Blob 到后端进行语音识别 */
-  const uploadBlob = async (audioBlob) => {
-    setIsUploading(true);
-    setTranscribedText('');
+
+  // 🆕 获取AI评价
+  const getAiEvaluation = async (transcribed, attemptIdParam) => {
+    setIsEvaluating(true);
+    setAiFeedback(null);
+    setEvaluationError('');
+    
     try {
-      const mime = audioBlob.type || 'audio/wav';
-      const audioFile = new File([audioBlob], `feynman-record-${id}.wav`, { type: mime });
-
-      const formData = new FormData();
-      formData.append('audio', audioFile);
-      formData.append('knowledgePointId', id);
-      formData.append('durationSeconds', String(seconds));
-      formData.append('mimeType', mime);
-      const url = '/audio/transcribe';
-
-      const response = await apiClient.post(url, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-
-      const result =
-        response.data?.result ||
-        response.data?.text ||
-        response.data?.transcription ||
-        response.data?.DisplayText ||
-        response.data?.results?.[0]?.alternatives?.[0]?.transcript ||
-        '';
-      const msg = response.data?.msg || response.data?.message || '';
-      setTranscribedText(result || msg || '转录结果为空，请稍后重试。');
-    } catch (error) {
-      const errorMsg =
-        error?.response?.data?.msg ||
-        error?.response?.data?.error ||
-        error?.message ||
-        '转录失败，请重试。';
-      setTranscribedText(`转录失败: ${errorMsg}`);
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  /** 状态与录音控制 */
-  const [status, setStatus] = useState('idle');
-  const recorderRef = useRef(null);
-  const [mediaBlobUrl, setMediaBlobUrl] = useState('');
-
-  // 计时器
-  useEffect(() => {
-    if (status === 'recording') {
-      if (!timerRef.current) {
-        timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
-      }
-    } else {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [status]);
-
-  /** 设置音量监听（使用已有的 stream） */
-  const setupVolumeMeter = (stream) => {
-    try {
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      audioCtxRef.current = audioCtx;
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      analyserRef.current = analyser;
-      source.connect(analyser);
-
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      const tick = () => {
-        analyser.getByteTimeDomainData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          const v = (dataArray[i] - 128) / 128;
-          sum += v * v;
-        }
-        const rms = Math.sqrt(sum / dataArray.length);
-        const level = Math.min(1, rms * 3);
-        volumeRef.current = level;
-        setVolume(level);
-        rafRef.current = requestAnimationFrame(tick);
-      };
-      tick();
-    } catch (e) {
-      console.warn('音量监听初始化失败:', e?.message);
-    }
-  };
-
-  const teardownVolumeMeter = () => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close();
-      audioCtxRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    analyserRef.current = null;
-    setVolume(0);
-  };
-  /** 修正版：开始录音（合并 getUserMedia，仅调用一次） */
-  const handleStart = async () => {
-    setSaveMsg('');
-    setSeconds(0);
-    try {
-      // 此时动态加载 RecordRTC
-      const RecordRTC = await getRecordRTC();
-      if (!RecordRTC) {
-        throw new Error('RecordRTC 模块暑未加载');
-      }
-
-      // 唯一一次 getUserMedia 调用
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      streamRef.current = stream;
-      
-      // 配置音量监听（使用为获取的 stream）
-      setupVolumeMeter(stream);
-      
-      // 创建并开始录音
-      const recorder = new RecordRTC(stream, {
-        type: 'audio',
-        mimeType: 'audio/wav',
-        recorderType: RecordRTC.StereoAudioRecorder,
-        numberOfAudioChannels: 1,
-      });
-      recorderRef.current = recorder;
-      recorder.startRecording();
-      setStatus('recording');
-    } catch (e) {
-      console.error('无法开始录音:', e);
-      teardownVolumeMeter();
-    }
-  };
-
-  /** 停止录音 */
-  const handleStop = () => {
-    teardownVolumeMeter();
-    if (!recorderRef.current) return;
-    const recorder = recorderRef.current;
-    recorder.stopRecording(async () => {
-      try {
-        const blob = recorder.getBlob();
-        const url = URL.createObjectURL(blob);
-        setMediaBlobUrl(url);
-        setStatus('idle');
-        await uploadBlob(blob);
-      } catch (e) {
-        console.error('停止录音失败:', e);
-      } finally {
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-        }
-        recorderRef.current = null;
-      }
-    });
-  };
-
-  const handlePause = () => {
-    if (!recorderRef.current) return;
-    try {
-      recorderRef.current.pauseRecording();
-      setStatus('paused');
-    } catch (e) {
-      console.warn('暂停失败:', e);
-    }
-  };
-
-  const handleResume = () => {
-    if (!recorderRef.current) return;
-    try {
-      recorderRef.current.resumeRecording();
-      setStatus('recording');
-    } catch (e) {
-      console.warn('继续失败:', e);
-    }
-  };
-
-  const saveAttempt = async () => {
-    if (!transcribedText) return;
-    try {
-      setIsSaving(true);
-      setSaveMsg('');
-      await apiClient.post('/feynman-attempts', {
+      // 调用评价API（后端将基于 knowledgePointId 读取原文作为标准答案）
+      const response = await apiClient.post('/audio/evaluate', {
         knowledgePointId: id,
-        text: transcribedText,
-        durationSeconds: seconds,
+        transcribedText: transcribed,
+        attemptId: attemptIdParam || attemptId || undefined
+      }, {
+        timeout: 35000  // 35秒超时(使用快速模型)
       });
-      setSaveMsg('已保存复述。');
-    } catch (e) {
-      setSaveMsg(`保存失败：${e?.response?.data?.msg || e?.message || '未知错误'}`);
+
+      const feedback = response.data;
+      setAiFeedback(feedback);
+
+      // 根据分数自动更新复习状态
+      if (feedback.score < 60) {
+        // 分数低于60，标记为需复习
+        await apiClient.put(`/knowledge-points/${id}/review`, {
+          reviewList: true
+        });
+        console.log('✅ 已自动标记为需复习');
+      } else {
+        // 分数≥ 60，解除复习标记
+        await apiClient.put(`/knowledge-points/${id}/review`, {
+          reviewList: false
+        });
+        console.log('✅ 已自动解除复习标记');
+      }
+
+    } catch (error) {
+      console.error('获取AI评价失败:', error);
+      
+      if (error.code === 'ECONNABORTED') {
+        setEvaluationError('AI评价超时,请稍后重试');
+      } else {
+        const msg = error?.response?.data?.msg || error.message || '评价失败';
+        setEvaluationError(`AI评价失败: ${msg}`);
+      }
     } finally {
-      setIsSaving(false);
+      setIsEvaluating(false);
+    }
+  };
+
+  // 转录完成后的回调
+  const handleTranscribeComplete = (text) => {
+    setTranscribedText(text);
+    // ✏️ 不再自动评估，等待用户编辑后手动提交
+  };
+
+  // 仅发起 AI 评估（不保存）
+  const handleEvaluateOnly = async () => {
+    if (!transcribedText || transcribedText.startsWith('转录失败')) return;
+    await getAiEvaluation(transcribedText);
+  };
+
+  // 评估完成后可选择保存（可选保存转录文本/AI润色文本）
+  const handleSaveAttempt = async () => {
+    if (!aiFeedback) return;
+    setIsSavingAttempt(true);
+    setSaveAttemptMsg('');
+    try {
+      const payload = {
+        knowledgePointId: id,
+        score: aiFeedback.score,
+        feedback: aiFeedback.evaluation + '\n' + (aiFeedback.strengths || []).map(s=>`优点: ${s}`).join('\n') + '\n' + (aiFeedback.weaknesses || []).map(w=>`待改进: ${w}`).join('\n'),
+        standardAnswer: aiFeedback.standardAnswer || originalContent,
+      };
+      if (saveTranscribed) payload.transcribedText = transcribedText;
+      if (savePolished) payload.polishedText = aiFeedback.polishedText;
+
+      const resp = await apiClient.post('/attempts', payload);
+      const createdId = resp.data?.id || resp.data?._id;
+      setAttemptId(createdId || null);
+      setSaveAttemptMsg('✅ 已保存本次复述/评价结果');
+    } catch (e) {
+      setSaveAttemptMsg(`❌ 保存失败：${e?.response?.data?.msg || e?.message || '未知错误'}`);
+    } finally {
+      setIsSavingAttempt(false);
     }
   };
 
   return (
-    <div>
-      <h1>复述知识点: {kpTitle}</h1>
-      {!!loadError && <p style={{ color: 'red' }}>{loadError}</p>}
-      <p>录音状态: {status}</p>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button onClick={handleStart} disabled={status === 'recording'}>
-          开始录音
-        </button>
-        <button onClick={handleStop} disabled={status !== 'recording' && status !== 'paused'}>
-          停止录音
-        </button>
-        <button onClick={handlePause} disabled={status !== 'recording'}>
-          暂停
-        </button>
-        <button onClick={handleResume} disabled={status !== 'paused'}>
-          继续
-        </button>
-        <span style={{ color: '#555' }}>
-          计时：{String(Math.floor(seconds / 60)).padStart(2, '0')}:{String(seconds % 60).padStart(2, '0')}
-        </span>
-
-        {/* 音量条 */}
-        <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 24, padding: '0 6px', background: '#f2f2f2', borderRadius: 6 }}>
-          {Array.from({ length: 16 }).map((_, i) => {
-            const jitter = (Math.random() - 0.5) * 0.15;
-            const lvl = Math.max(0, Math.min(1, volume + jitter));
-            const h = 4 + Math.round(lvl * 20 * ((i + 4) / 20));
-            const color = status === 'recording' ? (lvl > 0.75 ? '#e74c3c' : lvl > 0.4 ? '#f39c12' : '#2ecc71') : '#bbb';
-            return <div key={i} style={{ width: 6, height: h, background: color, borderRadius: 2, transition: 'height 80ms linear' }} />;
-          })}
-        </div>
+    <div className="feynman-container">
+      {/* 页面头部 */}
+      <div className="feynman-header">
+        <Link to="/" className="back-link">← 返回列表</Link>
+        <h1>🎤 复述知识点: <span className="kp-title">{kpTitle}</span></h1>
       </div>
 
-      {mediaBlobUrl && (
-        <div style={{ marginBottom: 12 }}>
-          <audio src={mediaBlobUrl} controls />
-        </div>
-      )}
+      {!!loadError && <div className="feynman-error">❌ {loadError}</div>}
 
-      <h2>AI 转录结果</h2>
-      {isUploading && <p style={{ color: '#666' }}>正在上传并转录，请稍候...</p>}
-      <div style={{ border: '1px solid #ccc', padding: '1rem', minHeight: '100px', background: '#fafafa', borderRadius: '4px' }}>
-        {transcribedText ? (
-          <p style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{transcribedText}</p>
-        ) : (
-          <p style={{ margin: 0, color: '#999', fontStyle: 'italic' }}>暂无转录结果，请先录音并停止。</p>
+      {/* 录音区域 */}
+      <div className="recorder-card">
+        <VoiceRecorder 
+          onTranscribeComplete={handleTranscribeComplete} 
+          relatedId={id}
+          transcribedText={transcribedText}
+          onTextChange={setTranscribedText}
+        />
+      </div>
+      
+      {/* 提交评估按钮 */}
+      <div className="submit-section">
+        <button 
+          onClick={handleEvaluateOnly} 
+          disabled={!transcribedText || transcribedText.startsWith('转录失败') || isEvaluating}
+          className="btn-evaluate"
+        >
+          {isEvaluating ? '⏳ 正在评估...' : '🚀 提交 AI 评估'}
+        </button>
+        {transcribedText && !transcribedText.startsWith('转录失败') && !isEvaluating && (
+          <span className="submit-hint">💡 可先编辑转录文本，再提交评估</span>
         )}
       </div>
 
-      <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <button onClick={saveAttempt} disabled={!transcribedText || isSaving}>
-          {isSaving ? '保存中...' : '保存复述'}
-        </button>
-        {!!saveMsg && <span style={{ color: saveMsg.startsWith('保存失败') ? 'red' : '#0a5' }}>{saveMsg}</span>}
+      {/* AI反馈展示区域 */}
+      <div className="feedback-section">
+        <h2>🤖 AI 教练反馈</h2>
+        
+        {isEvaluating && (
+          <div className="ai-loading">
+            <div className="ai-loading-icon">🧑‍🏫</div>
+            <p className="ai-loading-text">AI教练正在批阅您的答卷...</p>
+            <p className="ai-loading-hint">预计需要 5-10 秒，请耐心等待</p>
+            <div className="ai-loading-badge">💡 正在分析您的表述、润色文本、评估质量...</div>
+          </div>
+        )}
+
+        {evaluationError && (
+          <div className="error-retry">
+            <p>{evaluationError}</p>
+            <button onClick={() => getAiEvaluation(transcribedText)} className="btn-retry">
+              🔄 重新评价
+            </button>
+          </div>
+        )}
+
+        {aiFeedback && !isEvaluating && (
+          <div>
+            {/* 保存选项 */}
+            <div className="save-options">
+              <div className="save-options-inner">
+                <label className="save-checkbox">
+                  <input type="checkbox" checked={saveTranscribed} onChange={e => setSaveTranscribed(e.target.checked)} />
+                  <span>保存原始转录文本</span>
+                </label>
+                <label className="save-checkbox">
+                  <input type="checkbox" checked={savePolished} onChange={e => setSavePolished(e.target.checked)} />
+                  <span>保存AI润色后的文本</span>
+                </label>
+                <button onClick={handleSaveAttempt} disabled={isSavingAttempt} className="btn-save">
+                  {isSavingAttempt ? '⏳ 正在保存...' : '💾 保存本次结果'}
+                </button>
+                {!!saveAttemptMsg && (
+                  <span className={`save-msg ${saveAttemptMsg.includes('失败') ? 'error' : 'success'}`}>
+                    {saveAttemptMsg}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* 重新评估提示 */}
+            <div className="reevaluate-hint">
+              <span>💡 如果需要修改转录文本，请向上滚动编辑，然后点击：</span>
+              <button
+                onClick={() => getAiEvaluation(transcribedText, attemptId)}
+                disabled={isEvaluating}
+                className="btn-reevaluate"
+              >
+                🔄 重新评估
+              </button>
+            </div>
+            
+            <div className="feedback-content">
+              {/* 左侧: 文本和评价 */}
+              <div className="feedback-main">
+                <section className="feedback-card standard">
+                  <h3>📖 标准答案（知识点原文）</h3>
+                  <p>{aiFeedback.standardAnswer || originalContent}</p>
+                </section>
+
+                <section className="feedback-card polished">
+                  <h3>✨ AI润色后的文本</h3>
+                  <p>{aiFeedback.polishedText}</p>
+                </section>
+
+                <section className="feedback-card">
+                  <h3>📝 综合评价</h3>
+                  <p>{aiFeedback.evaluation}</p>
+                </section>
+
+                <section className="feedback-card">
+                  <h3>👍 优点</h3>
+                  <ul>
+                    {aiFeedback.strengths.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section className="feedback-card">
+                  <h3>💡 待改进</h3>
+                  <ul>
+                    {aiFeedback.weaknesses.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                </section>
+              </div>
+
+              {/* 右侧: 分数 */}
+              <div className="feedback-score">
+                <h3>综合得分</h3>
+                <div className={`score-value ${aiFeedback.score > 80 ? 'high' : 'low'}`}>
+                  {aiFeedback.score}
+                </div>
+                <p className="score-max">满分 100</p>
+                {aiFeedback.score < 60 && (
+                  <div className="review-warning">⚠️ 已自动标记为需复习</div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

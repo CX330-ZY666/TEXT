@@ -7,11 +7,9 @@ import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext.jsx'; // 引入AuthProvider
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <BrowserRouter>
-      <AuthProvider> {/* 用AuthProvider包裹App */}
+  <BrowserRouter>
+    <AuthProvider>
       <App />
-      </AuthProvider>
-    </BrowserRouter>
-  </React.StrictMode>,
+    </AuthProvider>
+  </BrowserRouter>,
 );
