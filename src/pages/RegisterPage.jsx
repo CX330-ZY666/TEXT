@@ -6,6 +6,7 @@ import './AuthPage.css';
 
 function RegisterPage() {
   const [formData, setFormData] = useState({
+    username: '',
     email: '',
     password: '',
     confirmPassword: ''
@@ -51,6 +52,7 @@ function RegisterPage() {
     setLoading(true);
     try {
       await apiClient.post('/users/register', {
+        username: formData.username,
         email: formData.email,
         password: formData.password
       });
@@ -85,6 +87,18 @@ function RegisterPage() {
                 <span>✅</span> {success}
               </div>
             )}
+            
+            <div className="form-group">
+              <label>👤 用户名</label>
+              <input 
+                name="username"
+                type="text" 
+                value={formData.username} 
+                onChange={handleChange}
+                placeholder="请输入用户名"
+                required
+              />
+            </div>
             
             <div className="form-group">
               <label>📧 邮箱地址</label>
