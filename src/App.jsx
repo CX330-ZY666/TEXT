@@ -14,6 +14,8 @@ import AgentPage from './pages/AgentPage';
 import GraphPage from './pages/GraphPage';
 import ThreeJSPage from './pages/ThreeJSPage';
 import KnowledgeUniversePage from './pages/KnowledgeUniversePage';
+import FeynmanPracticePage from './pages/FeynmanPracticePage';
+import FeynmanPracticeSelectPage from './pages/FeynmanPracticeSelectPage';
 
 function App() {
   return (
@@ -35,6 +37,8 @@ function App() {
           <Route path="/graph" element={<GraphPage />} />
           <Route path="/3d-world" element={<ThreeJSPage />} />
           <Route path="/knowledge-universe" element={<KnowledgeUniversePage />} />
+          <Route path="/feynman-practice" element={<FeynmanPracticeSelectPage />} />
+          <Route path="/feynman-practice/:id" element={<FeynmanPracticePage />} />
         </Route>
       </Route>
     </Routes>

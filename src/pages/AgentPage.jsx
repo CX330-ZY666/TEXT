@@ -29,9 +29,6 @@ function AgentPage() {
         // 添加空的机器人消息，将被逐步填充
         setMessages(prev => [...prev, { sender: 'bot', text: '', sources: null }]);
 
-        // 添加空的机器人消息，将被逐步填充
-        setMessages(prev => [...prev, { sender: 'bot', text: '', sources: null }]);
-
         try {
             console.log('[Frontend] 开始流式请求:', questionText);
             const response = await fetch('http://localhost:3000/api/ai/rag-qa-stream', {
@@ -78,7 +75,9 @@ function AgentPage() {
                             const parsed = JSON.parse(data);
 
                             if (parsed.chunk) {
-                                accumulatedText += parsed.chunk;
+                                // 确保chunk是字符串
+                                const chunkText = typeof parsed.chunk === 'string' ? parsed.chunk : String(parsed.chunk);
+                                accumulatedText += chunkText;
                                 setMessages(prev => {
                                     const newMessages = [...prev];
                                     newMessages[newMessages.length - 1].text = accumulatedText;
@@ -125,7 +124,7 @@ function AgentPage() {
             {/* 页面头部 */}
             <div className="agent-header">
                 <div className="agent-header-content">
-                    <div className="agent-avatar">🤖</div>
+                    <div className="agent-avatar">😊</div>
                     <div className="agent-info">
                         <h1>💬 AI 智能助手</h1>
                         <p>基于你的知识库，智能回答问题</p>
@@ -141,29 +140,33 @@ function AgentPage() {
             <div className="chat-window">
                 {messages.map((msg, index) => (
                     <div key={index} className={`message ${msg.sender}`}>
-                        {msg.sender === 'bot' && <div className="message-avatar">🤖</div>}
+                        {msg.sender === 'bot' && <div className="message-avatar">😊</div>}
                         <div className="message-content">
-                            <div className="message-bubble">{msg.text}</div>
+                            <div className="message-bubble">{typeof msg.text === 'string' ? msg.text : String(msg.text || '')}</div>
                             {msg.sources && msg.sources.length > 0 && (
                                 <div className="message-sources">
                                     <details>
                                         <summary>📚 参考来源 ({msg.sources.length})</summary>
-                                        {msg.sources.map((source, idx) => (
-                                            <div key={idx} className="source-item">
-                                                <strong>文档 {idx + 1}:</strong>
-                                                <p>{source.content}</p>
-                                            </div>
-                                        ))}
+                                        {msg.sources.map((source, idx) => {
+                                            // 清理HTML标签
+                                            const cleanContent = source.content ? source.content.replace(/<\/?[^>]+(>|$)/g, ' ').replace(/\s+/g, ' ').trim() : '';
+                                            return (
+                                                <div key={idx} className="source-item">
+                                                    <strong>文档 {idx + 1}:</strong>
+                                                    <p>{cleanContent}</p>
+                                                </div>
+                                            );
+                                        })}
                                     </details>
                                 </div>
                             )}
                         </div>
-                        {msg.sender === 'user' && <div className="message-avatar user-avatar">👤</div>}
+                        {msg.sender === 'user' && <div className="message-avatar user-avatar">😊</div>}
                     </div>
                 ))}
                 {isLoading && (
                     <div className="message bot">
-                        <div className="message-avatar">🤖</div>
+                        <div className="message-avatar">😊</div>
                         <div className="message-content">
                             <div className="message-bubble typing-indicator">
                                 <span></span><span></span><span></span>

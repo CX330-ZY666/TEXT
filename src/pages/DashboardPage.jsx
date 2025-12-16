@@ -53,7 +53,10 @@ function DashboardPage() {
       try {
         setLoading(true);
         const response = await apiClient.get('/knowledge-points');
-        setKnowledgePoints(response.data || []);
+        // 兼容新格式：{ knowledgePoints, relations } 和旧格式：[...]
+        const data = response.data;
+        const kps = data.knowledgePoints || data || [];
+        setKnowledgePoints(kps);
       } catch (err) {
         setError('获取知识点失败');
         console.error(err);
@@ -322,6 +325,7 @@ function DashboardPage() {
                   <Link to={`/kp/edit/${kp._id}`} className="kp-btn kp-btn-edit">✏️ 编辑</Link>
                   <button onClick={() => handleDelete(kp._id)} className="kp-btn kp-btn-delete">🗑️ 删除</button>
                   <Link to={`/feynman/${kp._id}`} className="kp-btn kp-btn-feynman">🎤 开始复述</Link>
+                  <Link to={`/feynman-practice/${kp._id}`} className="kp-btn kp-btn-practice">🎓 费曼练习</Link>
                   <Link to={`/quiz/${kp._id}`} className="kp-btn kp-btn-quiz">📝 开始测评</Link>
                 </div>
               </li>

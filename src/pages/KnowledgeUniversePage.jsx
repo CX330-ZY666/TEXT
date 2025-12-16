@@ -5,24 +5,288 @@ import * as d3 from 'd3-force-3d';
 import DOMPurify from 'dompurify';
 import apiClient from '../api/axios';
 
+// 关系类型配置（与 RelationshipManager 保持一致）
+const RELATION_TYPES = {
+    'prerequisite': { label: '前置知识', color: 0xff4444, icon: '⬅️' },
+    'derived': { label: '派生', color: 0x44ff44, icon: '🌿' },
+    'similar': { label: '相似', color: 0x4444ff, icon: '🔄' },
+    'contrast': { label: '对比', color: 0xffaa00, icon: '⚖️' },
+    'application': { label: '应用', color: 0xff44ff, icon: '🎯' },
+    'includes': { label: '包含', color: 0x44ffff, icon: '📦' },
+    'reference': { label: '引用', color: 0xaaaaaa, icon: '🔗' }
+};
+
+// 可视化参数配置
+const VISUAL_CONFIG = {
+    // 行星参数
+    PLANET_SIZE_MIN: 6,
+    PLANET_SIZE_RANGE: 4,
+    PLANET_SPHERE_SEGMENTS: 64,
+    
+    // 分布参数
+    ORBIT_RADIUS_MIN: 90,
+    ORBIT_RADIUS_RANGE: 90,
+    
+    // 地球参数
+    EARTH_RADIUS: 25,
+    EARTH_ATMOSPHERE_RADIUS: 28.5,
+    
+    // 陨石带参数
+    ASTEROID_SIZE: 0.35,
+    ASTEROID_COUNT_MIN: 60,
+    ASTEROID_COUNT_MAX: 180,
+    ASTEROID_DENSITY: 1.2,
+    ASTEROID_TUBE_RADIUS: 3.0,
+    ASTEROID_SPEED_MIN: 0.01,
+    ASTEROID_SPEED_RANGE: 0.03,
+    
+    // 交互参数
+    HOVER_SCALE_TARGET: 1.8,
+    HOVER_SCALE_NEIGHBOR: 1.3,
+    HOVER_SCALE_IRRELEVANT: 0.6,
+    SELECTED_SCALE: 1.5,
+    
+    // 性能参数
+    FPS_TARGET_MIN: 48,
+    FPS_TARGET_MAX: 58,
+    CULLING_DISTANCE: 750,
+    
+    // 星空参数
+    STAR_COUNT: 10000,
+    STAR_SIZE: 1.5,
+    STAR_SPREAD: 2500
+};
+
+// UI样式配置
+const UI_STYLES = {
+    fullScreenContainer: {
+        width: '100vw',
+        height: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+    },
+    cosmicBackground: {
+        background: 'linear-gradient(to bottom, #000511, #000000)',
+        color: '#fff'
+    },
+    glassCard: {
+        background: 'rgba(0,5,17,0.9)',
+        backdropFilter: 'blur(10px)',
+        borderRadius: '12px',
+        border: '2px solid rgba(0,204,255,0.5)',
+        boxShadow: '0 5px 20px rgba(0,0,0,0.5)'
+    },
+    detailCard: {
+        position: 'fixed',
+        right: '25px',
+        bottom: '25px',
+        width: '350px',
+        maxHeight: '500px',
+        background: 'rgba(0,5,17,0.95)',
+        backdropFilter: 'blur(15px)',
+        color: 'white',
+        padding: '25px',
+        borderRadius: '15px',
+        boxShadow: '0 10px 40px rgba(0,0,0,0.8), 0 0 30px rgba(0,204,255,0.6)',
+        border: '2px solid rgba(0,204,255,0.7)',
+        overflow: 'auto',
+        zIndex: 1000,
+        animation: 'slideIn 0.3s ease-out'
+    }
+};
+
 function KnowledgeUniversePage() {
     const mountRef = useRef(null);
     const labelsContainerRef = useRef(null);
     const labelsRef = useRef([]);
     const hoverState = useRef(null); // { nodeIdx, neighbors: Set<int>, links: Set<int> }
+    const planetsRef = useRef([]); // 存储planets数组，供搜索和路径功能使用
+    const cameraRef = useRef(null); // 存储相机引用
+    const controlsRef = useRef(null); // 存储控制器引用
     const [knowledgePoints, setKnowledgePoints] = useState([]);
+    const [relations, setRelations] = useState([]); // 新增：关系数据
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [selectedNodeData, setSelectedNodeData] = useState(null);
+    const [displayMode, setDisplayMode] = useState('semantic'); // 'semantic' | 'tags' | 'mixed'
+    const [searchQuery, setSearchQuery] = useState(''); // 搜索关键词
+    const [searchResults, setSearchResults] = useState([]); // 搜索结果
 
-    // 获取知识点数据
+    // 搜索功能：实时过滤知识点
+    useEffect(() => {
+        if (!searchQuery.trim()) {
+            setSearchResults([]);
+            return;
+        }
+
+        const query = searchQuery.toLowerCase().trim();
+        
+        // 模糊匹配：标题、分类、标签、内容
+        const results = knowledgePoints.filter(kp => {
+            // 匹配标题
+            if (kp.title && kp.title.toLowerCase().includes(query)) {
+                return true;
+            }
+            // 匹配分类
+            if (kp.category && kp.category.toLowerCase().includes(query)) {
+                return true;
+            }
+            // 匹配标签
+            if (kp.tags && Array.isArray(kp.tags)) {
+                if (kp.tags.some(tag => tag.toLowerCase().includes(query))) {
+                    return true;
+                }
+            }
+            // 匹配内容（移除HTML标签后匹配）
+            if (kp.content) {
+                const textContent = kp.content.replace(/<[^>]*>/g, '').toLowerCase();
+                if (textContent.includes(query)) {
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        // 按匹配度排序：标题匹配 > 分类匹配 > 标签匹配 > 内容匹配
+        results.sort((a, b) => {
+            const aTitle = a.title?.toLowerCase().includes(query) ? 3 : 0;
+            const aCategory = a.category?.toLowerCase().includes(query) ? 2 : 0;
+            const aTags = a.tags?.some(tag => tag.toLowerCase().includes(query)) ? 1 : 0;
+            const aScore = aTitle + aCategory + aTags;
+
+            const bTitle = b.title?.toLowerCase().includes(query) ? 3 : 0;
+            const bCategory = b.category?.toLowerCase().includes(query) ? 2 : 0;
+            const bTags = b.tags?.some(tag => tag.toLowerCase().includes(query)) ? 1 : 0;
+            const bScore = bTitle + bCategory + bTags;
+
+            return bScore - aScore;
+        });
+
+        // 最多显示10个结果
+        setSearchResults(results.slice(0, 10).map(kp => ({
+            id: kp._id,
+            title: kp.title,
+            category: kp.category,
+            tags: kp.tags
+        })));
+    }, [searchQuery, knowledgePoints]);
+
+    // 点击搜索结果，相机飞到目标星球
+    const flyToNode = (nodeId) => {
+        const planets = planetsRef.current;
+        const camera = cameraRef.current;
+        const controls = controlsRef.current;
+        
+        if (!planets || !camera || !controls) return;
+        
+        // 找到对应的星球
+        const targetPlanet = planets.find(p => p.userData.id === nodeId);
+        if (!targetPlanet) return;
+        
+        // 获取星球的世界坐标（因为galaxyGroup在旋转）
+        const targetPos = new THREE.Vector3();
+        targetPlanet.getWorldPosition(targetPos);
+        
+        // 计算相机位置（星球前方一定距离）
+        const direction = targetPos.clone().normalize();
+        const distance = 80; // 相机到星球的距离
+        const cameraTarget = targetPos.clone().add(direction.multiplyScalar(distance));
+        
+        // 平滑移动相机（动画）
+        const startPos = camera.position.clone();
+        const startTarget = controls.target.clone();
+        
+        let progress = 0;
+        const duration = 1500; // 1.5秒
+        const startTime = Date.now();
+        
+        const animate = () => {
+            const elapsed = Date.now() - startTime;
+            progress = Math.min(elapsed / duration, 1);
+            
+            // 缓动函数（easeInOutCubic）
+            const eased = progress < 0.5 
+                ? 4 * progress * progress * progress 
+                : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+            
+            // 插值相机位置
+            camera.position.lerpVectors(startPos, cameraTarget, eased);
+            controls.target.lerpVectors(startTarget, targetPos, eased);
+            controls.update();
+            
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                // 动画结束，高亮星球
+                setSelectedNodeData(targetPlanet.userData);
+                // 清空搜索框
+                setSearchQuery('');
+            }
+        };
+        
+        animate();
+    };
+
+    // 飞回宇宙全局视角
+    const flyBackToOverview = () => {
+        const camera = cameraRef.current;
+        const controls = controlsRef.current;
+        
+        if (!camera || !controls) return;
+        
+        // 默认视角位置
+        const defaultCameraPos = new THREE.Vector3(0, 40, 380);
+        const defaultTarget = new THREE.Vector3(0, 0, 0);
+        
+        // 平滑飞回
+        const startPos = camera.position.clone();
+        const startTarget = controls.target.clone();
+        
+        let progress = 0;
+        const duration = 1500; // 1.5秒
+        const startTime = Date.now();
+        
+        const animate = () => {
+            const elapsed = Date.now() - startTime;
+            progress = Math.min(elapsed / duration, 1);
+            
+            // 缓动函数
+            const eased = progress < 0.5 
+                ? 4 * progress * progress * progress 
+                : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+            
+            // 插值相机位置
+            camera.position.lerpVectors(startPos, defaultCameraPos, eased);
+            controls.target.lerpVectors(startTarget, defaultTarget, eased);
+            controls.update();
+            
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            }
+        };
+        
+        animate();
+    };
+
+    // 获取知识点和关系数据
     useEffect(() => {
         apiClient.get('/knowledge-points')
             .then(res => {
-                if (res.data.length === 0) {
+                const data = res.data;
+                // 后端现在返回 { knowledgePoints, relations }
+                const kps = data.knowledgePoints || data;
+                const rels = data.relations || [];
+                
+                if (kps.length === 0) {
                     setError('还没有知识点,快去创建吧!');
                 } else {
-                    setKnowledgePoints(res.data);
+                    setKnowledgePoints(kps);
+                    setRelations(rels);
+                    if (import.meta.env.DEV) {
+                        console.log('加载知识点:', kps.length, '个');
+                        console.log('加载关系:', rels.length, '个');
+                    }
                 }
                 setLoading(false);
             })
@@ -42,39 +306,39 @@ function KnowledgeUniversePage() {
         const height = currentMount.clientHeight;
 
         // === Asteroid Trails 工具与共享资源 ===
-        // 1. 几何体：稍微增大一点 (0.25 -> 0.35)，兼顾可见性与性能
+        // 1. 几何体：兼顾可见性与性能
         // InstancedMesh 技术极其高效，渲染数万个此类小物体对现代显卡几乎无压力
-        const rockGeometry = new THREE.DodecahedronGeometry(0.35, 0);
+        const rockGeometry = new THREE.DodecahedronGeometry(VISUAL_CONFIG.ASTEROID_SIZE, 0);
         
         // 2. 材质：高亮设置，确保清晰可见
+        // 使用白色基础材质，让 setColorAt 的颜色能完全显示
         const rockMaterial = new THREE.MeshStandardMaterial({
-            color: 0xe0e0e0, // 接近白色的亮灰
-            roughness: 0.6,  // 稍微光滑一点，反光更多
-            metalness: 0.4,  // 增加金属感
-            emissive: 0x666666, // 中等强度的自发光
-            emissiveIntensity: 0.6, // 即使在阴影中也能看清
+            color: 0xffffff, // 纯白色，不影响实例颜色
+            roughness: 0.4,  // 更光滑，反光更强
+            metalness: 0.6,  // 提高金属感，增强反光
+            emissive: 0xffffff, // 白色自发光，让实例颜色发光
+            emissiveIntensity: 0.3, // 中等自发光强度，增强可见性
             flatShading: true
         });
         
-        // 生成曲线：微弧线，不再大幅向中心弯曲
-        const createCurve = (src, dst) => {
-            const p0 = src.clone();
-            const p1 = dst.clone();
-            // 简单的三维直线略带弧度，不再强制指向球心
-            // 使用中点向外稍微延伸一点点，或者直接用直线
-            // 这里使用 CatmullRom 配合稍微偏移的中点，形成自然的微弧
-            const mid = p0.clone().add(p1).multiplyScalar(0.5);
-            const len = p0.distanceTo(p1);
-            // 偏移方向：从中点向原点连线的反方向（向外拱），或者随机一点
-            // 为了整洁，我们只做极微小的随机扰动，或者干脆直线
-            // 现在的笼子感是因为所有线都往里弯。改为直线测试效果。
-            return new THREE.LineCurve3(p0, p1); 
+        /**
+         * 创建两点间的直线路径（用于陨石带路径）
+         * @param {THREE.Vector3} src - 起始行星位置
+         * @param {THREE.Vector3} dst - 目标行星位置
+         * @returns {THREE.LineCurve3} 直线路径对象
+         */
+        const createStraightPath = (src, dst) => {
+            return new THREE.LineCurve3(src.clone(), dst.clone()); 
         };
 
-        // 创建单条“陨石流” (Asteroid Trail)
-        const createAsteroidTrail = (sourceIdx, targetIdx) => {
+        // 创建单条“陨石流” (Asteroid Trail) - 支持关系类型颜色
+        const createAsteroidTrail = (sourceIdx, targetIdx, linkMetadata = {}) => {
             const src = planets[sourceIdx].position.clone();
             const dst = planets[targetIdx].position.clone();
+            
+            // 根据关系类型选择颜色
+            const baseColor = linkMetadata.color || 0xe0e0e0;
+            const isSemantic = linkMetadata.isSemantic || false;
             
             // 对于直线，方向不敏感，但保留逻辑
             let start = src, end = dst, fromIdx = sourceIdx, toIdx = targetIdx;
@@ -83,11 +347,14 @@ function KnowledgeUniversePage() {
             const curve = new THREE.LineCurve3(start, end);
             const distance = start.distanceTo(end);
             
-            // 数量：保持较高密度，形成带状 (60-180)
-            const COUNT = Math.max(60, Math.min(180, Math.floor(distance * 1.2)));
+            // 数量：保持较高密度，形成带状
+            const COUNT = Math.max(
+                VISUAL_CONFIG.ASTEROID_COUNT_MIN, 
+                Math.min(VISUAL_CONFIG.ASTEROID_COUNT_MAX, Math.floor(distance * VISUAL_CONFIG.ASTEROID_DENSITY))
+            );
             
-            // 管道半径：扩大散布范围 (1.5 -> 3.0)，让陨石散开，不要挤成一根肠
-            const tubeRadius = 3.0; 
+            // 管道半径：扩大散布范围，让陨石散开形成带状
+            const tubeRadius = VISUAL_CONFIG.ASTEROID_TUBE_RADIUS;
 
             const mesh = new THREE.InstancedMesh(rockGeometry, rockMaterial, COUNT);
             mesh.frustumCulled = false;
@@ -95,17 +362,19 @@ function KnowledgeUniversePage() {
                 mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
             }
             
+            // 🎨 基于关系类型的颜色调色板（增强亮度）
+            const mainColor = new THREE.Color(baseColor);
             const palette = [
-                new THREE.Color(0xcccccc), // 亮灰
-                new THREE.Color(0xaaaaaa), // 中灰
-                new THREE.Color(0x999999), // 深灰
-                new THREE.Color(0xe0e0e0)  // 白灰
+                mainColor.clone().multiplyScalar(2.5),   // 超亮色
+                mainColor.clone().multiplyScalar(2.0),   // 很亮
+                mainColor.clone().multiplyScalar(1.8),   // 亮色
+                mainColor.clone().multiplyScalar(1.5)    // 中亮
             ];
             
             for(let i=0; i<COUNT; i++) {
                 const color = palette[Math.floor(Math.random() * palette.length)];
-                // 整体提亮，确保没有太暗的石头
-                color.multiplyScalar(0.9 + Math.random() * 0.3);
+                // 保持高亮度，轻微变化
+                color.multiplyScalar(1.2 + Math.random() * 0.6); // 范围：1.2-1.8
                 mesh.setColorAt(i, color);
             }
             mesh.instanceColor.needsUpdate = true;
@@ -136,8 +405,8 @@ function KnowledgeUniversePage() {
 
             for (let i = 0; i < COUNT; i++) {
                 baseT[i] = Math.random(); 
-                // 速度大幅降低：模拟太空失重的缓慢漂浮感
-                speed[i] = 0.01 + Math.random() * 0.03; 
+                // 速度：模拟太空失重的缓慢漂浮感
+                speed[i] = VISUAL_CONFIG.ASTEROID_SPEED_MIN + Math.random() * VISUAL_CONFIG.ASTEROID_SPEED_RANGE;
                 
                 // 随机形状：尺寸适中 (0.8 ~ 1.5)
                 scale3D[i*3 + 0] = 0.8 + Math.random() * 0.7;
@@ -175,9 +444,64 @@ function KnowledgeUniversePage() {
                 count: COUNT,
                 fromIdx,
                 toIdx,
+                linkMetadata, // 保存关系元数据
             };
 
             galaxyGroup.add(mesh);
+            
+            // 创建关系类型标签
+            if (linkMetadata.relationType || linkMetadata.isSemantic) {
+                const relationConfig = RELATION_TYPES[linkMetadata.relationType] || RELATION_TYPES['reference'];
+                const labelText = `${relationConfig.icon} ${relationConfig.label}`;
+                
+                // 计算中点位置
+                const midPoint = new THREE.Vector3(
+                    (src.x + dst.x) / 2,
+                    (src.y + dst.y) / 2,
+                    (src.z + dst.z) / 2
+                );
+                
+                // 创建文字纹理（更大更清晰）
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.width = 512;
+                canvas.height = 128;
+                
+                // 透明背景，融入场景
+                context.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // 文字发光效果（外发光）
+                context.shadowColor = `#${mainColor.getHexString()}`;
+                context.shadowBlur = 25;
+                context.shadowOffsetX = 0;
+                context.shadowOffsetY = 0;
+                
+                // 主文字（更大字体）
+                context.font = 'bold 48px Microsoft YaHei, Arial, sans-serif';
+                context.fillStyle = '#ffffff';
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                context.fillText(labelText, canvas.width / 2, canvas.height / 2);
+                
+                // 再画一遍，增加亮度
+                context.shadowBlur = 15;
+                context.fillText(labelText, canvas.width / 2, canvas.height / 2);
+                
+                const texture = new THREE.CanvasTexture(canvas);
+                const spriteMaterial = new THREE.SpriteMaterial({ 
+                    map: texture,
+                    transparent: true,
+                    depthTest: false, // 始终显示在最前面
+                    opacity: 0.95
+                });
+                const sprite = new THREE.Sprite(spriteMaterial);
+                sprite.position.copy(midPoint);
+                sprite.scale.set(30, 8, 1); // 加大标签，更易见
+                
+                galaxyGroup.add(sprite);
+                mesh.userData.labelSprite = sprite; // 关联标签
+            }
+            
             return mesh;
         };
         // 场景（纯黑背景，深邃宇宙）
@@ -191,6 +515,7 @@ function KnowledgeUniversePage() {
         // 相机（保持现有视角）
         const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 3000);
         camera.position.set(0, 40, 380);
+        cameraRef.current = camera; // 保存引用
 
         // 渲染器
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -228,23 +553,24 @@ function KnowledgeUniversePage() {
         controls.enableDamping = true;
         controls.minDistance = 50;
         controls.maxDistance = 800;
+        controlsRef.current = controls; // 保存引用
 
         // 星空背景
         const createStars = () => {
             const geometry = new THREE.BufferGeometry();
-            const count = 10000;
+            const count = VISUAL_CONFIG.STAR_COUNT;
             const positions = new Float32Array(count * 3);
 
             for (let i = 0; i < count * 3; i++) {
-                positions[i] = (Math.random() - 0.5) * 2500;  // 扩大星空范围
+                positions[i] = (Math.random() - 0.5) * VISUAL_CONFIG.STAR_SPREAD;
             }
 
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             const material = new THREE.PointsMaterial({
                 color: 0xffffff,
-                size: 1.5, // 星星变小，更精致
+                size: VISUAL_CONFIG.STAR_SIZE,
                 transparent: true,
-                opacity: 0.6 // 降低不透明度，不要抢了地球的风头
+                opacity: 0.6
             });
 
             return new THREE.Points(geometry, material);
@@ -260,7 +586,7 @@ function KnowledgeUniversePage() {
             'https://unpkg.com/three-globe@2.31.1/example/img/earth-blue-marble.jpg'
         );
         
-        const earthGeo = new THREE.SphereGeometry(25, 64, 64); 
+        const earthGeo = new THREE.SphereGeometry(VISUAL_CONFIG.EARTH_RADIUS, 64, 64);
         const earthMat = new THREE.MeshStandardMaterial({
             map: earthTexture,
             roughness: 0.6, // 增加粗糙度，减少类似塑料的高光
@@ -291,7 +617,7 @@ function KnowledgeUniversePage() {
             }
         `;
         
-        const atmosphereGeo = new THREE.SphereGeometry(28.5, 64, 64); // 稍微大一点点
+        const atmosphereGeo = new THREE.SphereGeometry(VISUAL_CONFIG.EARTH_ATMOSPHERE_RADIUS, 64, 64);
         const atmosphereMat = new THREE.ShaderMaterial({
             vertexShader: vertexShader,
             fragmentShader: fragmentShader,
@@ -304,7 +630,7 @@ function KnowledgeUniversePage() {
         earthGroup.add(atmosphere);
 
         // 内部辉光 (Inner Glow) - 仅在边缘增强，模拟瑞利散射
-        const innerGlowGeo = new THREE.SphereGeometry(25, 64, 64); // 与地球一样大
+        const innerGlowGeo = new THREE.SphereGeometry(VISUAL_CONFIG.EARTH_RADIUS, 64, 64);
         const innerGlowMat = new THREE.ShaderMaterial({
             vertexShader: vertexShader,
             fragmentShader: `
@@ -386,29 +712,17 @@ function KnowledgeUniversePage() {
         ];
 
         // 创建知识点行星（数据驱动）
-        console.log('创建行星，知识点数量:', knowledgePoints.length);
+        if (import.meta.env.DEV) {
+            console.log('创建行星，知识点数量:', knowledgePoints.length);
+        }
         
         const planets = knowledgePoints.map((kp, index) => {
-            const size = 6 + Math.random() * 4;
+            const size = VISUAL_CONFIG.PLANET_SIZE_MIN + Math.random() * VISUAL_CONFIG.PLANET_SIZE_RANGE;
             const textureConfig = planetTextures[index % planetTextures.length];
 
-            const geometry = new THREE.SphereGeometry(size, 64, 64);
-            
-            // 加载纹理（带fallback）
-            const texture = textureLoader.load(
-                textureConfig.url,
-                undefined,
-                undefined,
-                () => {
-                    // 纹理加载失败时使用纯色
-                    planet.material.map = null;
-                    planet.material.color = new THREE.Color(textureConfig.color);
-                    planet.material.needsUpdate = true;
-                }
-            );
+            const geometry = new THREE.SphereGeometry(size, VISUAL_CONFIG.PLANET_SPHERE_SEGMENTS, VISUAL_CONFIG.PLANET_SPHERE_SEGMENTS);
             
             const material = new THREE.MeshStandardMaterial({
-                map: texture,
                 roughness: 0.8, // 统一粗糙度，模拟真实岩石/气体表面
                 metalness: 0.0, // 非金属
                 emissive: new THREE.Color(textureConfig.emissive),
@@ -417,12 +731,28 @@ function KnowledgeUniversePage() {
 
             const planet = new THREE.Mesh(geometry, material);
             
+            // 加载纹理（带fallback）- 修复闭包bug
+            const texture = textureLoader.load(
+                textureConfig.url,
+                undefined,
+                undefined,
+                () => {
+                    // 纹理加载失败时使用纯色
+                    if (planet && planet.material) {
+                        planet.material.map = null;
+                        planet.material.color = new THREE.Color(textureConfig.color);
+                        planet.material.needsUpdate = true;
+                    }
+                }
+            );
+            material.map = texture;
+            
             // 计算位置（球形分布 - 黄金螺旋算法）
             // 使用 Fibonacci Sphere 算法保证初始分布均匀，避免重叠
             const phi = Math.acos(1 - 2 * (index + 0.5) / knowledgePoints.length); // 极角 0 -> PI
             const theta = Math.PI * (1 + Math.sqrt(5)) * (index + 0.5); // 黄金角螺旋
             
-            const r = 90 + Math.random() * 90; // 半径范围 90-180，形成厚球壳
+            const r = VISUAL_CONFIG.ORBIT_RADIUS_MIN + Math.random() * VISUAL_CONFIG.ORBIT_RADIUS_RANGE;
             
             // 球坐标转笛卡尔坐标 (Y轴向上)
             const posX = r * Math.sin(phi) * Math.cos(theta);
@@ -450,13 +780,17 @@ function KnowledgeUniversePage() {
             return planet;
         });
         
-        console.log('所有行星已添加到场景，总数:', planets.length);
-        console.log('场景中的子对象数量:', scene.children.length);
+        // 保存planets引用供外部使用
+        planetsRef.current = planets;
+        
+        if (import.meta.env.DEV) {
+            console.log('所有行星已添加到场景，总数:', planets.length);
+            console.log('场景中的子对象数量:', scene.children.length);
+        }
 
         // 使用d3-force-3d预计算最优位置
         const forceData = planets.map((planet, i) => {
             const pos = planet.position;
-            console.log(`行星${i}初始位置:`, { x: pos.x, y: pos.y, z: pos.z });
             return {
                 id: planet.userData.id,
                 index: i,
@@ -467,52 +801,71 @@ function KnowledgeUniversePage() {
             };
         });
 
-        // 准备连接线数据（基于标签的智能连接策略）
+        // 💡 新：生成连接线数据（支持三种模式）
         const linkData = [];
-        const addedLinks = new Set(); // 避免重复连接
+        const addedLinks = new Map(); // key -> link metadata
         
         // 辅助函数：添加连接
-        const addLink = (i, j) => {
-            if (i === j) return;
-            const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+        const addLink = (sourceIdx, targetIdx, metadata = {}) => {
+            if (sourceIdx === targetIdx) return;
+            const key = sourceIdx < targetIdx ? `${sourceIdx}-${targetIdx}` : `${targetIdx}-${sourceIdx}`;
             if (!addedLinks.has(key)) {
-                linkData.push({ source: i, target: j });
-                addedLinks.add(key);
+                linkData.push({ 
+                    source: sourceIdx, 
+                    target: targetIdx,
+                    ...metadata
+                });
+                addedLinks.set(key, metadata);
             }
         };
         
-        // 策略1：如果后端有 related_points，优先使用（显式关系）
-        knowledgePoints.forEach((kp, i) => {
-            if (kp.related_points && Array.isArray(kp.related_points)) {
-                kp.related_points.forEach(relatedId => {
-                    const targetIndex = knowledgePoints.findIndex(p => p._id === relatedId);
-                    if (targetIndex !== -1) {
-                        addLink(i, targetIndex);
-                    }
-                });
-            }
-        });
-        
-        // 策略2：基于标签的连接（核心策略）
-        knowledgePoints.forEach((kp1, i) => {
-            const tags1 = kp1.tags || [];
-            if (tags1.length === 0) return;
-            
-            knowledgePoints.forEach((kp2, j) => {
-                if (i >= j) return; // 避免重复和自连接
+        // 模式 1: 语义关系（显式定义的知识图谱）
+        if (displayMode === 'semantic' || displayMode === 'mixed') {
+            relations.forEach(rel => {
+                const sourceIdx = knowledgePoints.findIndex(kp => kp._id === rel.source);
+                const targetIdx = knowledgePoints.findIndex(kp => kp._id === rel.target);
                 
-                const tags2 = kp2.tags || [];
-                // 计算共同标签
-                const commonTags = tags1.filter(tag => tags2.includes(tag));
-                
-                // 有共同标签就建立连接
-                if (commonTags.length > 0) {
-                    addLink(i, j);
+                if (sourceIdx !== -1 && targetIdx !== -1) {
+                    const config = RELATION_TYPES[rel.relationType] || RELATION_TYPES['reference'];
+                    addLink(sourceIdx, targetIdx, {
+                        relationType: rel.relationType,
+                        color: config.color,
+                        strength: rel.strength || 0.5,
+                        description: rel.description,
+                        isSemantic: true // 标记为语义关系
+                    });
                 }
             });
-        });
+        }
         
-        // 策略3：(已移除) 同分类补充连接 -> 仅保留严格的标签/关系连接
+        // 模式 2: 标签推断（自动生成）
+        if (displayMode === 'tags' || displayMode === 'mixed') {
+            knowledgePoints.forEach((kp1, i) => {
+                const tags1 = kp1.tags || [];
+                if (tags1.length === 0) return;
+                
+                knowledgePoints.forEach((kp2, j) => {
+                    if (i >= j) return;
+                    
+                    const tags2 = kp2.tags || [];
+                    const commonTags = tags1.filter(tag => tags2.includes(tag));
+                    
+                    if (commonTags.length > 0) {
+                        const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+                        // 如果已经有语义关系，则跳过
+                        if (!addedLinks.has(key)) {
+                            addLink(i, j, {
+                                relationType: 'similar',
+                                color: 0x666666, // 灰色，区分于语义关系
+                                strength: 0.3,
+                                isSemantic: false, // 标记为标签推断
+                                commonTags: commonTags
+                            });
+                        }
+                    }
+                });
+            });
+        }
         // if (linkData.length < knowledgePoints.length * 0.5) { ... }
         
         // 构建邻接表，用于快速查找
@@ -522,8 +875,10 @@ function KnowledgeUniversePage() {
             adjacency[link.target].push({ nodeIdx: link.source, linkIdx });
         });
 
-        console.log('连接线数量:', linkData.length);
-        console.log('连接策略: 严格基于标签匹配与显式关系');
+        if (import.meta.env.DEV) {
+            console.log('连接线数量:', linkData.length);
+            console.log('连接策略: 严格基于标签匹配与显式关系');
+        }
 
         // 径向约束力（扩大最大半径）
         function radialForce() {
@@ -543,16 +898,17 @@ function KnowledgeUniversePage() {
             };
         }
 
-        // 力导向模拟（调整为更稀疏的布局）
-        const simulation = d3.forceSimulation(forceData)
-            .numDimensions(3)
+        // 力导向模拟（实时运行）
+        const simulation = d3.forceSimulation()
+            .numDimensions(3) // 必须先设置维度
+            .nodes(forceData) // 然后添加节点
             .force('charge', d3.forceManyBody().strength(-120)) // 增强排斥力，让行星更分散
             .force('center', d3.forceCenter(0, 0, 0).strength(0.08)) // 减弱中心引力
             .force('collision', d3.forceCollide().radius(d => d.radius * 2).strength(1.0)) // 加大碰撞半径
             .force('radial', radialForce()) // 添加径向约束
             .alphaDecay(0.02)
             .velocityDecay(0.6)
-            .stop();
+            .alphaMin(0.001); // 保持低速运行，不完全停止
         
         // 如果有连接线，添加link力（需要转换为节点对象引用）
         if (linkData.length > 0) {
@@ -568,35 +924,56 @@ function KnowledgeUniversePage() {
             );
         }
 
-        console.log('力导向模拟开始前，检查第一个节点:', forceData[0]);
+        if (import.meta.env.DEV) {
+            console.log('力导向模拟开始前，检查第一个节点:', forceData[0]);
+        }
         
-        // 预运行100次达到稳定
-        for (let i = 0; i < 100; i++) {
+        // 预运行50次快速达到初始稳定（减少初始化时间）
+        for (let i = 0; i < 50; i++) {
             simulation.tick();
-            if (i === 0) {
+            if (import.meta.env.DEV && i === 0) {
                 console.log('第1次tick后，第一个节点:', forceData[0]);
             }
         }
         
-        console.log('100次tick后，第一个节点:', forceData[0]);
+        if (import.meta.env.DEV) {
+            console.log('50次tick后，第一个节点:', forceData[0]);
+        }
 
-        // 应用优化后的位置
+        // 应用初始位置
         forceData.forEach((d, i) => {
+            const planet = planets[i];
+            if (!planet) {
+                console.error(`节点${i}不存在`);
+                return;
+            }
+            
+            // NaN检查与安全恢复
             if (isNaN(d.x) || isNaN(d.y) || isNaN(d.z)) {
                 console.error(`节点${i}位置为NaN:`, d);
-                // 恢复为初始位置
-                d.x = planets[i].position.x;
-                d.y = planets[i].position.y;
-                d.z = planets[i].position.z;
+                // 使用安全的默认值（球面上的随机点）
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                const r = 90 + Math.random() * 90;
+                d.x = r * Math.sin(phi) * Math.cos(theta);
+                d.y = r * Math.cos(phi);
+                d.z = r * Math.sin(phi) * Math.sin(theta);
             }
-            planets[i].position.set(d.x, d.y, d.z);
+            
+            planet.position.set(d.x, d.y, d.z);
         });
         
-        console.log('力导向后的行星位置范围:');
-        const distances = forceData.map(d => Math.sqrt(d.x*d.x + d.y*d.y + d.z*d.z));
-        console.log('最小距离:', Math.min(...distances).toFixed(2));
-        console.log('最大距离:', Math.max(...distances).toFixed(2));
-        console.log('平均距离:', (distances.reduce((a,b)=>a+b)/distances.length).toFixed(2));
+        // 🔥 性能保护：节点数量过多时降低力导向更新频率
+        const forceUpdateInterval = knowledgePoints.length > 50 ? 3 : 1; // >50个节点时每3帧更新一次
+        let forceFrameCounter = 0;
+        
+        if (import.meta.env.DEV) {
+            console.log('力导向后的行星位置范围:');
+            const distances = forceData.map(d => Math.sqrt(d.x*d.x + d.y*d.y + d.z*d.z));
+            console.log('最小距离:', Math.min(...distances).toFixed(2));
+            console.log('最大距离:', Math.max(...distances).toFixed(2));
+            console.log('平均距离:', (distances.reduce((a,b)=>a+b)/distances.length).toFixed(2));
+        }
 
         // 计算每条连接的基础密度与全局缩放，满足实例总预算
         const linkMetrics = linkData.map(l => {
@@ -611,8 +988,12 @@ function KnowledgeUniversePage() {
         let globalCountScale = Math.min(1, instanceBudget / sumBase);
         globalCountScale = Math.max(globalCountScale, 0.25);
 
-        // 使用 InstancedMesh 生成“陨石带”
-        const asteroidTrails = linkMetrics.map(m => createAsteroidTrail(m.l.source, m.l.target));
+        // 使用 InstancedMesh 生成“陨石带”（带上关系元数据）
+        const asteroidTrails = linkMetrics.map(m => {
+            // 传入 link 的元数据（包含关系类型、颜色等）
+            const linkMeta = m.l;
+            return createAsteroidTrail(linkMeta.source, linkMeta.target, linkMeta);
+        });
         // 记录每条 stream 的原始 count
         asteroidTrails.forEach(mesh => { mesh.userData.drawCountBase = mesh.userData.count; });
         // 首次应用全局缩放
@@ -624,7 +1005,11 @@ function KnowledgeUniversePage() {
         let selectedPlanet = null;
 
         function onMouseMove(event) {
+            if (!currentMount || !event) return;
+            
             const rect = currentMount.getBoundingClientRect();
+            if (!rect.width || !rect.height) return;
+            
             mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
             mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
@@ -634,12 +1019,9 @@ function KnowledgeUniversePage() {
 
             if (intersects.length > 0) {
                 const object = intersects[0].object;
-                // 找到对应的索引（我们可以从 userData 或 planets 数组反查，但这里 planets 是按索引顺序的）
-                // 为了稳健，我们在 planets 生成时应该确保存储了 index，虽然 userData 里有 id，但没存 index
-                // 让我们假设 planets 数组顺序没变。更好的方式是在 userData 里存 index
                 let idx = planets.indexOf(object);
                 
-                if (idx !== -1) {
+                if (idx !== -1 && adjacency[idx]) {
                     // 如果已经在悬停这个节点，就不重复计算
                     if (hoverState.current?.nodeIdx !== idx) {
                         const neighbors = new Set(adjacency[idx].map(n => n.nodeIdx));
@@ -709,8 +1091,8 @@ function KnowledgeUniversePage() {
             fpsAccum += fps; fpsFrames += 1; fpsWindow += delta;
             if (fpsWindow >= 1.0) {
                 const avg = fpsAccum / fpsFrames;
-                if (avg < 48) drawScale = Math.max(0.3, drawScale * 0.9);
-                else if (avg > 58) drawScale = Math.min(1.0, drawScale * 1.05);
+                if (avg < VISUAL_CONFIG.FPS_TARGET_MIN) drawScale = Math.max(0.3, drawScale * 0.9);
+                else if (avg > VISUAL_CONFIG.FPS_TARGET_MAX) drawScale = Math.min(1.0, drawScale * 1.05);
                 fpsAccum = 0; fpsFrames = 0; fpsWindow = 0;
             }
 
@@ -729,6 +1111,22 @@ function KnowledgeUniversePage() {
             // ---------------------------------------------------
             const hover = hoverState.current;
 
+            // 0. 实时力导向更新（性能保护）
+            forceFrameCounter++;
+            if (forceFrameCounter >= forceUpdateInterval) {
+                forceFrameCounter = 0;
+                simulation.tick(); // 继续模拟
+                
+                // 更新行星位置（平滑过渡）
+                forceData.forEach((d, i) => {
+                    const planet = planets[i];
+                    if (planet && !isNaN(d.x) && !isNaN(d.y) && !isNaN(d.z)) {
+                        // 使用 lerp 平滑移动，避免突兀
+                        planet.position.lerp(new THREE.Vector3(d.x, d.y, d.z), 0.1);
+                    }
+                });
+            }
+            
             // 1. 更新行星 (Planets)
             planets.forEach((planet, i) => {
                 planet.rotation.y += planet.userData.rotationSpeed;
@@ -741,21 +1139,21 @@ function KnowledgeUniversePage() {
                 if (hover) {
                     if (i === hover.nodeIdx) {
                         // 当前悬停目标：放大，高亮发光
-                        targetScale = 1.8;
-                        targetEmissiveInt = 1.5; // 悬停时才发光
+                        targetScale = VISUAL_CONFIG.HOVER_SCALE_TARGET;
+                        targetEmissiveInt = 1.5;
                     } else if (hover.neighbors.has(i)) {
                         // 邻居节点：稍微放大，微光
-                        targetScale = 1.3;
+                        targetScale = VISUAL_CONFIG.HOVER_SCALE_NEIGHBOR;
                         targetEmissiveInt = 0.5;
                     } else {
                         // 其他无关节点：变暗，变小
-                        targetScale = 0.6; // 稍微变小
+                        targetScale = VISUAL_CONFIG.HOVER_SCALE_IRRELEVANT;
                         targetEmissiveInt = 0.1;
-                        targetOpacity = 0.3; // 视觉上变暗
+                        targetOpacity = 0.3;
                     }
                 } else if (selectedPlanet && planet === selectedPlanet) {
                      // 保持选中状态的高亮
-                     targetScale = 1.5;
+                     targetScale = VISUAL_CONFIG.SELECTED_SCALE;
                      targetEmissiveInt = 0.8;
                 }
 
@@ -777,8 +1175,8 @@ function KnowledgeUniversePage() {
                 }
 
                 // 2. 更新标签位置与样式 (UI Labels)
-                const label = labelsRef.current[i];
-                if (label) {
+                const label = labelsRef.current?.[i];
+                if (label && currentMount) {
                     // 获取行星的世界坐标 (考虑 galaxyGroup 的旋转)
                     // 必须克隆位置，否则会修改原始位置
                     const worldPos = planet.position.clone().applyMatrix4(galaxyMatrix);
@@ -836,13 +1234,16 @@ function KnowledgeUniversePage() {
                 // 连线可见性判断
                 let isVisible = true;
                 let speedMultiplier = 1.0;
+                let labelOpacity = 0.95; // 默认就很清晰
 
                 if (hover) {
                     if (hover.links.has(idx)) {
                         isVisible = true;
                         speedMultiplier = 4.0; // 关联连线加速流动！
+                        labelOpacity = 1.0; // 标签完全不透明
                     } else {
                         isVisible = false; // 隐藏无关连线
+                        labelOpacity = 0.1; // 标签几乎透明
                     }
                 }
 
@@ -860,10 +1261,14 @@ function KnowledgeUniversePage() {
 
                 // 视距裁剪
                 const cam = camera.position;
-                const fromP = planets[ud.fromIdx].position;
-                const toP = planets[ud.toIdx].position;
-                const far = 750;
-                const nearScale = (cam.distanceTo(fromP) > far && cam.distanceTo(toP) > far) ? 0.1 : 1.0;
+                const fromPlanet = planets[ud.fromIdx];
+                const toPlanet = planets[ud.toIdx];
+                if (!fromPlanet || !toPlanet) return;
+                
+                const fromP = fromPlanet.position;
+                const toP = toPlanet.position;
+                const nearScale = (cam.distanceTo(fromP) > VISUAL_CONFIG.CULLING_DISTANCE && 
+                                  cam.distanceTo(toP) > VISUAL_CONFIG.CULLING_DISTANCE) ? 0.1 : 1.0;
                 mesh.count = Math.max(0, Math.floor(ud.drawCountBase * drawScale * nearScale));
 
                 for (let i = 0; i < mesh.count; i++) {
@@ -902,6 +1307,12 @@ function KnowledgeUniversePage() {
                     mesh.setMatrixAt(i, ud.tmpMatrix);
                 }
                 mesh.instanceMatrix.needsUpdate = true;
+                
+                // 更新关系标签的可见性
+                if (ud.labelSprite) {
+                    ud.labelSprite.visible = mesh.visible;
+                    ud.labelSprite.material.opacity = labelOpacity;
+                }
             });
             
             /* 移除旧的交互逻辑，避免冲突
@@ -935,6 +1346,11 @@ function KnowledgeUniversePage() {
             currentMount.removeEventListener('click', onMouseClick);
             document.body.style.cursor = 'default';
             
+            // 停止力导向模拟
+            if (simulation) {
+                simulation.stop();
+            }
+            
             // 释放所有几何体和材质
             planets.forEach(p => {
                 p.geometry.dispose();
@@ -942,10 +1358,15 @@ function KnowledgeUniversePage() {
             });
 
             // 移除并释放陨石带实例
-            if (typeof asteroidTrails !== 'undefined') {
+            if (asteroidTrails && Array.isArray(asteroidTrails)) {
                 asteroidTrails.forEach(trail => {
+                    if (trail.instanceMatrix?.dispose) {
+                        trail.instanceMatrix.dispose();
+                    }
+                    if (trail.instanceColor?.dispose) {
+                        trail.instanceColor.dispose();
+                    }
                     galaxyGroup.remove(trail);
-                    if (trail.instanceMatrix) trail.instanceMatrix.dispose && trail.instanceMatrix.dispose();
                 });
             }
             rockGeometry.dispose();
@@ -964,20 +1385,14 @@ function KnowledgeUniversePage() {
             renderer.dispose();
             controls.dispose();
         };
-    }, [knowledgePoints]);
+    }, [knowledgePoints, relations, displayMode]);
 
     if (loading) {
         return (
-            <div style={{
-                width: '100vw', height: '100vh',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: 'linear-gradient(to bottom, #000511, #000000)',
-                color: '#fff', fontSize: '20px'
-            }}>
+            <div style={{ ...UI_STYLES.fullScreenContainer, ...UI_STYLES.cosmicBackground, fontSize: '20px' }}>
                 <div style={{
-                    padding: '25px 45px', borderRadius: '12px',
-                    border: '2px solid #00ccff',
-                    boxShadow: '0 0 30px rgba(0,204,255,0.5)'
+                    padding: '25px 45px',
+                    ...UI_STYLES.glassCard
                 }}>
                     🌌 正在构建知识宇宙...
                 </div>
@@ -987,13 +1402,15 @@ function KnowledgeUniversePage() {
 
     if (error) {
         return (
-            <div style={{
-                width: '100vw', height: '100vh',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: '#000', color: '#ff4444', fontSize: '18px'
+            <div style={{ 
+                ...UI_STYLES.fullScreenContainer, 
+                background: '#000', 
+                color: '#ff4444', 
+                fontSize: '18px' 
             }}>
                 <div style={{
-                    padding: '25px', borderRadius: '10px',
+                    padding: '25px',
+                    borderRadius: '10px',
                     border: '2px solid #ff4444'
                 }}>
                     {error}
@@ -1006,7 +1423,198 @@ function KnowledgeUniversePage() {
         <div style={{ width: '100vw', height: '100vh', position: 'relative', overflow: 'hidden' }}>
             <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
             
-            {/* 连线模式提示信息 */}
+            {/* 搜索框 */}
+            <div style={{
+                position: 'fixed',
+                top: '100px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 100,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px'
+            }}>
+                {/* 搜索输入框 */}
+                <div style={{
+                    background: 'rgba(10, 15, 30, 0.9)',
+                    backdropFilter: 'blur(10px)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(100, 150, 200, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '10px 16px',
+                    gap: '10px',
+                    width: '320px'
+                }}>
+                    <span style={{ fontSize: '16px', opacity: 0.6 }}>🔍</span>
+                    <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="搜索知识点、标签、分类..."
+                        style={{
+                            flex: 1,
+                            background: 'transparent',
+                            border: 'none',
+                            outline: 'none',
+                            color: '#fff',
+                            fontSize: '14px'
+                        }}
+                    />
+                    {searchQuery && (
+                        <button
+                            onClick={() => setSearchQuery('')}
+                            style={{
+                                background: 'transparent',
+                                border: 'none',
+                                color: '#666',
+                                cursor: 'pointer',
+                                fontSize: '16px',
+                                padding: '0',
+                                width: '20px',
+                                height: '20px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                            }}
+                            title="清除搜索"
+                        >
+                            ×
+                        </button>
+                    )}
+                </div>
+                
+                {/* 搜索结果标签 - 水平排列 */}
+                {searchQuery && searchResults.length > 0 && (
+                    <div style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        maxWidth: '400px'
+                    }}>
+                        {searchResults.slice(0, 5).map((result) => (
+                            <div
+                                key={result.id}
+                                onClick={() => flyToNode(result.id)}
+                                style={{
+                                    background: 'rgba(10, 15, 30, 0.85)',
+                                    backdropFilter: 'blur(10px)',
+                                    borderRadius: '8px',
+                                    border: '1px solid rgba(100, 150, 200, 0.25)',
+                                    padding: '6px 14px',
+                                    fontSize: '13px',
+                                    color: 'rgba(255, 255, 255, 0.85)',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s',
+                                    whiteSpace: 'nowrap'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = 'rgba(30, 50, 80, 0.9)';
+                                    e.currentTarget.style.borderColor = 'rgba(100, 180, 255, 0.5)';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = 'rgba(10, 15, 30, 0.85)';
+                                    e.currentTarget.style.borderColor = 'rgba(100, 150, 200, 0.25)';
+                                }}
+                            >
+                                {result.title}
+                            </div>
+                        ))}
+                        {searchResults.length > 5 && (
+                            <div style={{
+                                padding: '6px 14px',
+                                fontSize: '12px',
+                                color: 'rgba(255, 255, 255, 0.5)'
+                            }}>
+                                +{searchResults.length - 5} 更多
+                            </div>
+                        )}
+                    </div>
+                )}
+                
+                {/* 无结果提示 */}
+                {searchQuery && searchResults.length === 0 && (
+                    <div style={{
+                        fontSize: '13px',
+                        color: 'rgba(255, 150, 150, 0.8)',
+                        padding: '6px 14px',
+                        background: 'rgba(255, 100, 100, 0.1)',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255, 100, 100, 0.2)'
+                    }}>
+                        未找到匹配的知识点
+                    </div>
+                )}
+            </div>
+            
+            {/* 关系模式切换器 */}
+            <div style={{
+                position: 'absolute',
+                top: '30px',
+                right: '30px',
+                zIndex: 10
+            }}>
+                <div style={{ ...UI_STYLES.glassCard, padding: '15px 20px' }}>
+                    <div style={{ 
+                        fontSize: '13px', 
+                        color: '#00ccff', 
+                        marginBottom: '10px',
+                        fontWeight: 'bold'
+                    }}>
+                        🎯 关系显示模式
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px', flexDirection: 'column' }}>
+                        <button
+                            onClick={() => setDisplayMode('semantic')}
+                            style={{
+                                padding: '8px 15px',
+                                background: displayMode === 'semantic' ? '#00ccff' : 'rgba(255,255,255,0.1)',
+                                color: displayMode === 'semantic' ? '#000' : '#fff',
+                                border: '1px solid rgba(255,255,255,0.3)',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                                fontWeight: displayMode === 'semantic' ? 'bold' : 'normal',
+                                transition: 'all 0.2s'
+                            }}
+                            title={`语义关系: 显示用户显式定义的关系 (${relations.length} 个)`}
+                        >
+                            🌿 语义关系 ({relations.length})
+                        </button>
+                        <button
+                            onClick={() => setDisplayMode('tags')}
+                            style={{
+                                padding: '8px 15px',
+                                background: displayMode === 'tags' ? '#00ccff' : 'rgba(255,255,255,0.1)',
+                                color: displayMode === 'tags' ? '#000' : '#fff',
+                                border: '1px solid rgba(255,255,255,0.3)',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                                fontWeight: displayMode === 'tags' ? 'bold' : 'normal',
+                                transition: 'all 0.2s'
+                            }}
+                            title="标签推断: 基于共同标签自动生成连接"
+                        >
+                            🏷️ 标签推断
+                        </button>
+                    </div>
+                    <div style={{
+                        marginTop: '10px',
+                        fontSize: '11px',
+                        color: '#999',
+                        lineHeight: '1.4'
+                    }}>
+                        💡 当前: <strong style={{ color: '#00ccff' }}>
+                            {displayMode === 'semantic' ? '语义关系模式' : '标签推断模式'}
+                        </strong>
+                        {displayMode === 'semantic' && <><br/>显示用户显式定义的知识关系</>}
+                        {displayMode === 'tags' && <><br/>基于共同标签自动推断连接</>}
+                    </div>
+                </div>
+            </div>
             
             {/* 3D 场景中的标签层 */}
             <div 
@@ -1074,22 +1682,16 @@ function KnowledgeUniversePage() {
             
             {/* 详情卡片 */}
             {selectedNodeData && (
-                <div style={{
-                    position: 'fixed', right: '25px', bottom: '25px',
-                    width: '350px', maxHeight: '500px',
-                    background: 'rgba(0,5,17,0.95)', backdropFilter: 'blur(15px)',
-                    color: 'white', padding: '25px', borderRadius: '15px',
-                    boxShadow: '0 10px 40px rgba(0,0,0,0.8), 0 0 30px rgba(0,204,255,0.6)',
-                    border: '2px solid rgba(0,204,255,0.7)',
-                    overflow: 'auto', zIndex: 1000,
-                    animation: 'slideIn 0.3s ease-out'
-                }}>
+                <div style={UI_STYLES.detailCard}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
                         <h3 style={{ margin: 0, fontSize: '22px', color: '#00ccff' }}>
                             🪐 {selectedNodeData.title}
                         </h3>
                         <button
-                            onClick={() => setSelectedNodeData(null)}
+                            onClick={() => {
+                                setSelectedNodeData(null);
+                                flyBackToOverview();
+                            }}
                             style={{
                                 background: 'rgba(255,255,255,0.1)',
                                 border: '1px solid rgba(255,255,255,0.3)',

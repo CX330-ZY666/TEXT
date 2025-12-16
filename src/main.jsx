@@ -3,13 +3,14 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
-import { BrowserRouter } from 'react-router-dom';
+import { HashRouter } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext.jsx'; // 引入AuthProvider
 
+// 使用 HashRouter 以支持 Electron 的 file:// 协议
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <BrowserRouter>
+  <HashRouter>
     <AuthProvider>
       <App />
     </AuthProvider>
-  </BrowserRouter>,
+  </HashRouter>,
 );

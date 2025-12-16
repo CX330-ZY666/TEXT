@@ -25,7 +25,10 @@ function KnowledgePointBrowser() {
       try {
         setLoading(true);
         const response = await apiClient.get('/knowledge-points');
-        setKnowledgePoints(response.data || []);
+        // 兼容新格式：{ knowledgePoints, relations } 和旧格式：[...]
+        const data = response.data;
+        const kps = data.knowledgePoints || data || [];
+        setKnowledgePoints(kps);
       } catch (err) {
         setError('获取知识点失败');
         console.error(err);

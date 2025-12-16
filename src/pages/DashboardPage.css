@@ -300,10 +300,12 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 1rem;
   box-shadow: 0 8px 30px rgba(102, 126, 234, 0.3);
   position: sticky;
   top: 1rem;
   z-index: 100;
+  flex-wrap: wrap;
 }
 
 .header-info h1 {
@@ -553,6 +555,17 @@
 .kp-btn-feynman:hover {
   background: #dcfce7;
   transform: translateY(-1px);
+}
+
+.kp-btn-practice {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: white;
+  border: none;
+}
+
+.kp-btn-practice:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
 }
 
 .kp-btn-quiz {

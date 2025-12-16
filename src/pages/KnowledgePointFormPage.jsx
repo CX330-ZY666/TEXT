@@ -4,6 +4,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import apiClient from '../api/axios';
 import LocalVoiceRecorder from '../components/LocalVoiceRecorder';
 import TagSelector from '../components/TagSelector';
+import RelationshipManager from '../components/RelationshipManager';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import QuillMarkdown from 'quilljs-markdown';
@@ -226,6 +227,18 @@ function KnowledgePointFormPage() {
                     </button>
                 </form>
             </div>
+
+            {/* 关系管理（仅编辑模式显示） */}
+            {isEditing && dataLoaded && (
+                <div className="kp-form-card" style={{ marginTop: '20px' }}>
+                    <RelationshipManager 
+                        currentKpId={id} 
+                        onRelationsChange={() => {
+                            console.log('关系已更新，可以刷新相关数据');
+                        }}
+                    />
+                </div>
+            )}
         </div>
     );
 }

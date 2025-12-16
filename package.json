@@ -26,6 +26,7 @@
     "axios": "^1.12.2",
     "baidu-aip-sdk": "^4.16.16",
     "child_process": "^1.0.2",
+    "d3-force": "^3.0.0",
     "d3-force-3d": "^3.0.6",
     "dompurify": "^3.3.0",
     "echarts": "^6.0.0",
