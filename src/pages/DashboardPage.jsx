@@ -125,7 +125,9 @@ function DashboardPage() {
   };
 
   // 筛选逻辑：结合搜索、标签和复习筛选
-  const filteredKnowledgePoints = knowledgePoints.filter(kp => {
+  // 确保 knowledgePoints 是数组
+  const safeKnowledgePoints = Array.isArray(knowledgePoints) ? knowledgePoints : [];
+  const filteredKnowledgePoints = safeKnowledgePoints.filter(kp => {
     const matchesSearch = !searchQuery || 
       kp.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       kp.content?.toLowerCase().includes(searchQuery.toLowerCase());
@@ -134,10 +136,10 @@ function DashboardPage() {
     return matchesSearch && matchesReview && matchesTag;
   });
   
-  const reviewCount = knowledgePoints.filter(kp => kp.reviewList).length;
+  const reviewCount = safeKnowledgePoints.filter(kp => kp.reviewList).length;
 
   // 统计所有标签及其数量
-  const allTags = knowledgePoints.reduce((acc, kp) => {
+  const allTags = safeKnowledgePoints.reduce((acc, kp) => {
     getKpTags(kp).forEach(tag => {
       acc[tag] = (acc[tag] || 0) + 1;
     });
@@ -187,7 +189,7 @@ function DashboardPage() {
           <div className="header-info">
             <h1>📚 我的知识点</h1>
             <div className="header-stats">
-              <span className="stat-item">📖 总计 <span className="stat-value">{knowledgePoints.length}</span> 个</span>
+              <span className="stat-item">📖 总计 <span className="stat-value">{safeKnowledgePoints.length}</span> 个</span>
               <span className="stat-item">🔔 待复习 <span className="stat-value">{reviewCount}</span> 个</span>
             </div>
           </div>
