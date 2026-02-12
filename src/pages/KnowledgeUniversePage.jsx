@@ -275,8 +275,8 @@ function KnowledgeUniversePage() {
             .then(res => {
                 const data = res.data;
                 // 后端现在返回 { knowledgePoints, relations }
-                const kps = data.knowledgePoints || data;
-                const rels = data.relations || [];
+                const kps = Array.isArray(data) ? data : (Array.isArray(data?.knowledgePoints) ? data.knowledgePoints : []);
+                const rels = Array.isArray(data?.relations) ? data.relations : [];
                 
                 if (kps.length === 0) {
                     setError('还没有知识点,快去创建吧!');

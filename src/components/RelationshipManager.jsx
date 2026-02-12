@@ -36,12 +36,13 @@ function RelationshipManager({ currentKpId, onRelationsChange }) {
             setLoading(true);
             // 获取所有知识点
             const kpRes = await apiClient.get('/knowledge-points');
-            const kps = kpRes.data.knowledgePoints || kpRes.data;
+            const kps = Array.isArray(kpRes.data) ? kpRes.data : (Array.isArray(kpRes.data?.knowledgePoints) ? kpRes.data.knowledgePoints : []);
             setAllKnowledgePoints(kps.filter(kp => kp._id !== currentKpId));
             
             // 获取当前知识点的所有关系
             const relRes = await apiClient.get('/relations');
-            const relations = relRes.data.filter(
+            const relData = Array.isArray(relRes.data) ? relRes.data : [];
+            const relations = relData.filter(
                 rel => rel.source === currentKpId || rel.target === currentKpId
             );
             setExistingRelations(relations);
