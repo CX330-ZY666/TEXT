@@ -42,7 +42,7 @@ function ThreeJSPage() {
                 const response = await apiClient.get('/knowledge-points');
                 // 兼容新格式：{ knowledgePoints, relations } 和旧格式：[...]
                 const data = response.data;
-                const kps = data.knowledgePoints || data || [];
+                const kps = Array.isArray(data) ? data : (Array.isArray(data?.knowledgePoints) ? data.knowledgePoints : []);
                 
                 // 保存完整知识点数据
                 setKnowledgePoints(kps);
@@ -121,7 +121,7 @@ function ThreeJSPage() {
             // 重新加载图谱数据以更新连接线
             const response = await apiClient.get('/knowledge-points');
             const data = response.data;
-            const kps = data.knowledgePoints || data || [];
+            const kps = Array.isArray(data) ? data : (Array.isArray(data?.knowledgePoints) ? data.knowledgePoints : []);
             setKnowledgePoints(kps);
             
             const nodes = kps.map(kp => ({
