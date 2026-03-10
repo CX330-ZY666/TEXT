@@ -31,7 +31,8 @@ function AgentPage() {
 
         try {
             console.log('[Frontend] 开始流式请求:', questionText);
-            const response = await fetch('http://localhost:3000/api/ai/rag-qa-stream', {
+            const apiBase = import.meta.env.VITE_API_URL || 'https://feynman-backend.onrender.com/api';
+            const response = await fetch(`${apiBase}/ai/rag-qa-stream`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
