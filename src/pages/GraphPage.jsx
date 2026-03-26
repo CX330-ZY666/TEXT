@@ -211,19 +211,28 @@ function GraphPage() {
         // d3-force Pre-calculation
         const simulationNodes = graphData.nodes.map((node, i) => {
           const baseSize = Math.round((node.symbolSize || 24) * 1.4);
+          const normalizedId = String(node.id || node._id || i);
           return {
             ...node,
-            id: node.id || i,
+            id: normalizedId,
             index: i,
             __baseSymbolSize: baseSize,
             radius: baseSize / 2 + 10 // Increased radius buffer
           };
         });
 
-        const simulationLinks = (graphData.links || []).map((link) => ({
-          source: typeof link.source === 'object' ? link.source.id : link.source,
-          target: typeof link.target === 'object' ? link.target.id : link.target
-        }));
+        const nodeIdSet = new Set(simulationNodes.map((n) => n.id));
+
+        const simulationLinks = (graphData.links || [])
+          .map((link) => {
+            const sourceRaw = typeof link.source === 'object' ? link.source.id : link.source;
+            const targetRaw = typeof link.target === 'object' ? link.target.id : link.target;
+            return {
+              source: String(sourceRaw || ''),
+              target: String(targetRaw || '')
+            };
+          })
+          .filter((link) => nodeIdSet.has(link.source) && nodeIdSet.has(link.target));
 
         const simulation = d3
           .forceSimulation(simulationNodes)
@@ -249,10 +258,18 @@ function GraphPage() {
           }
         }));
 
-        const processedLinks = (graphData.links || []).map((link) => ({
-          ...link,
-          relationLabelText: link.relationType ? (relationTypeMap[link.relationType] || link.relationLabel || '关系') : '引用'
-        }));
+        const processedLinks = (graphData.links || [])
+          .map((link) => {
+            const sourceRaw = typeof link.source === 'object' ? link.source.id : link.source;
+            const targetRaw = typeof link.target === 'object' ? link.target.id : link.target;
+            return {
+              ...link,
+              source: String(sourceRaw || ''),
+              target: String(targetRaw || ''),
+              relationLabelText: link.relationType ? (relationTypeMap[link.relationType] || link.relationLabel || '关系') : '引用'
+            };
+          })
+          .filter((link) => nodeIdSet.has(link.source) && nodeIdSet.has(link.target));
 
         const adjacency = buildAdjacency(processedLinks);
         setBaseGraph({ nodes: processedNodes, links: processedLinks, adjacency });
