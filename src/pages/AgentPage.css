@@ -88,13 +88,19 @@
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 }
 
-/* 消息行 */
-.message {
+/* 消息行 —— 全部加 .agent-page 前缀避免与 FeynmanPracticePage.css 冲突 */
+.agent-page .message {
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
   margin-bottom: 1.25rem;
   animation: messageIn 0.3s ease;
+  /* 重置 FeynmanPracticePage.css 的污染规则 */
+  background: none;
+  padding: 0;
+  max-width: 100%;
+  border-radius: 0;
+  color: inherit;
 }
 
 @keyframes messageIn {
@@ -108,11 +114,13 @@
   }
 }
 
-.message.user {
+.agent-page .message.user {
   flex-direction: row-reverse;
+  align-self: auto;
+  background: none;
 }
 
-.message-avatar {
+.agent-page .message-avatar {
   width: 36px;
   height: 36px;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -125,16 +133,16 @@
   box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
-.message-avatar.user-avatar {
+.agent-page .message-avatar.user-avatar {
   background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
 }
 
-.message-content {
+.agent-page .message-content {
   max-width: 70%;
 }
 
-.message-bubble {
+.agent-page .message-bubble {
   padding: 0.85rem 1.15rem;
   border-radius: 18px;
   line-height: 1.6;
@@ -142,13 +150,13 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
-.message.user .message-bubble {
+.agent-page .message.user .message-bubble {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border-bottom-right-radius: 4px;
 }
 
-.message.bot .message-bubble {
+.agent-page .message.bot .message-bubble {
   background: white;
   color: #374151;
   border-bottom-left-radius: 4px;
@@ -221,6 +229,7 @@
 
 .chat-input-form input {
   width: 100%;
+  box-sizing: border-box;
   padding: 0.85rem 1.25rem;
   border: 2px solid #e5e7eb;
   border-radius: 25px;

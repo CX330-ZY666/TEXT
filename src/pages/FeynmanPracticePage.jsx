@@ -97,6 +97,17 @@ function FeynmanPracticePage() {
       };
       setConversations(prev => [...prev, aiMessage]);
 
+      // 检查是否应该智能结束
+      if (response.data.shouldContinue === false) {
+        console.log('🎉 AI判断用户已经讲清楚了，准备自动结束练习');
+        console.log('原因:', response.data.reason);
+
+        // 延迟3秒后自动显示总结
+        setTimeout(() => {
+          handleEndPractice();
+        }, 3000);
+      }
+
     } catch (err) {
       console.error('AI回复失败:', err);
       setAiError(err.response?.data?.msg || 'AI学生暂时无法回应，请稍后重试');
@@ -158,11 +169,35 @@ function FeynmanPracticePage() {
   // 结束练习，显示总结
   const handleEndPractice = async () => {
     try {
-      const response = await apiClient.post('/feynman-practice/summary', {
-        knowledgePointId: id,
-        conversationHistory: conversations
+      // 并行调用总结和理解度评估
+      const [summaryResponse, evaluationResponse] = await Promise.all([
+        apiClient.post('/feynman-practice/summary', {
+          knowledgePointId: id,
+          conversationHistory: conversations
+        }),
+        apiClient.post('/feynman-practice/evaluate-understanding', {
+          knowledgePointId: id,
+          conversationHistory: conversations
+        }).catch(err => {
+          console.warn('理解度评估失败，使用默认值:', err);
+          return null;
+        })
+      ]);
+
+      // 合并总结和评估结果
+      const summaryData = summaryResponse.data;
+      const evaluationData = evaluationResponse?.data;
+
+      setSummary({
+        ...summaryData,
+        // 添加理解度评估数据
+        understandingScore: evaluationData?.understandingScore,
+        isParroting: evaluationData?.isParroting,
+        strengths: evaluationData?.strengths || [],
+        weaknesses: evaluationData?.weaknesses || [],
+        feedback: evaluationData?.feedback
       });
-      setSummary(response.data);
+
       setShowSummary(true);
     } catch (err) {
       console.error('获取总结失败:', err);
@@ -437,7 +472,47 @@ function FeynmanPracticePage() {
         <div className="summary-modal-overlay" onClick={() => setShowSummary(false)}>
           <div className="summary-modal" onClick={(e) => e.stopPropagation()}>
             <h2>🎉 练习完成！</h2>
-            
+
+            {/* 理解度评分（如果有） */}
+            {summary.understandingScore !== undefined && (
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(5, 150, 105, 0.1))',
+                border: '2px solid rgba(16, 185, 129, 0.3)',
+                borderRadius: '12px',
+                padding: '20px',
+                marginBottom: '20px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                  <h3 style={{ margin: 0, color: '#10b981' }}>📊 理解度评分</h3>
+                  <div style={{
+                    fontSize: '32px',
+                    fontWeight: 'bold',
+                    color: summary.understandingScore >= 70 ? '#10b981' : summary.understandingScore >= 50 ? '#f59e0b' : '#ef4444'
+                  }}>
+                    {summary.understandingScore}分
+                  </div>
+                </div>
+                {summary.isParroting && (
+                  <div style={{
+                    background: 'rgba(251, 191, 36, 0.2)',
+                    border: '1px solid rgba(251, 191, 36, 0.5)',
+                    borderRadius: '6px',
+                    padding: '8px 12px',
+                    marginBottom: '10px',
+                    color: '#fbbf24',
+                    fontSize: '14px'
+                  }}>
+                    ⚠️ 检测到可能只是复述原文，建议用自己的话重新表达
+                  </div>
+                )}
+                {summary.feedback && (
+                  <p style={{ color: '#ccc', margin: '10px 0 0 0', fontSize: '14px', lineHeight: '1.6' }}>
+                    {summary.feedback}
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="summary-stats">
               <div className="stat-item">
                 <div className="stat-value">
@@ -456,6 +531,42 @@ function FeynmanPracticePage() {
             </div>
 
             <p style={{ color: '#ccc', marginBottom: '20px' }}>{summary.summary}</p>
+
+            {/* 优点和待改进 */}
+            {(summary.strengths?.length > 0 || summary.weaknesses?.length > 0) && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '20px' }}>
+                {summary.strengths?.length > 0 && (
+                  <div style={{
+                    background: 'rgba(16, 185, 129, 0.1)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    borderRadius: '8px',
+                    padding: '15px'
+                  }}>
+                    <h4 style={{ color: '#10b981', margin: '0 0 10px 0', fontSize: '14px' }}>✅ 做得好的地方</h4>
+                    <ul style={{ margin: 0, paddingLeft: '20px', color: '#ccc', fontSize: '13px' }}>
+                      {summary.strengths.map((s, i) => (
+                        <li key={i} style={{ marginBottom: '5px' }}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {summary.weaknesses?.length > 0 && (
+                  <div style={{
+                    background: 'rgba(251, 191, 36, 0.1)',
+                    border: '1px solid rgba(251, 191, 36, 0.3)',
+                    borderRadius: '8px',
+                    padding: '15px'
+                  }}>
+                    <h4 style={{ color: '#fbbf24', margin: '0 0 10px 0', fontSize: '14px' }}>📝 可以改进的地方</h4>
+                    <ul style={{ margin: 0, paddingLeft: '20px', color: '#ccc', fontSize: '13px' }}>
+                      {summary.weaknesses.map((w, i) => (
+                        <li key={i} style={{ marginBottom: '5px' }}>{w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
 
             {summary.suggestions && summary.suggestions.length > 0 && (
               <div className="summary-suggestions">

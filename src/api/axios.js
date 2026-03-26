@@ -1,8 +1,10 @@
 // src/api/axios.js
 import axios from 'axios';
 
+const apiBaseURL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:3000/api');
+
 const apiClient = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || 'https://feynman-backend.onrender.com/api',
+    baseURL: apiBaseURL,
     headers: {
         'Content-Type': 'application/json',
     },

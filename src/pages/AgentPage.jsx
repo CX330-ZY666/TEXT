@@ -96,9 +96,12 @@ function AgentPage() {
 
                             if (parsed.error) {
                                 console.error('Stream error:', parsed.error);
+                                // 如果气泡已有内容（后端已发送友好 chunk），不再覆盖
                                 setMessages(prev => {
                                     const newMessages = [...prev];
-                                    newMessages[newMessages.length - 1].text = '抱歉，我遇到了一些问题，请稍后再试。';
+                                    if (!newMessages[newMessages.length - 1].text) {
+                                        newMessages[newMessages.length - 1].text = '⚠️ AI 服务出现异常，请稍后再试。';
+                                    }
                                     return newMessages;
                                 });
                             }
@@ -112,7 +115,9 @@ function AgentPage() {
             console.error('Streaming error:', error);
             setMessages(prev => {
                 const newMessages = [...prev];
-                newMessages[newMessages.length - 1].text = '抱歉，我遇到了一些问题，请稍后再试。';
+                if (!newMessages[newMessages.length - 1].text) {
+                    newMessages[newMessages.length - 1].text = '⚠️ 网络请求失败，请检查网络后重试。';
+                }
                 return newMessages;
             });
         } finally {
@@ -141,9 +146,13 @@ function AgentPage() {
             <div className="chat-window">
                 {messages.map((msg, index) => (
                     <div key={index} className={`message ${msg.sender}`}>
-                        {msg.sender === 'bot' && <div className="message-avatar">😊</div>}
+                        <div className={`message-avatar${msg.sender === 'user' ? ' user-avatar' : ''}`}>😊</div>
                         <div className="message-content">
-                            <div className="message-bubble">{typeof msg.text === 'string' ? msg.text : String(msg.text || '')}</div>
+                            <div className="message-bubble">
+                                {msg.sender === 'bot' && !msg.text && isLoading && index === messages.length - 1
+                                    ? <span className="typing-indicator"><span></span><span></span><span></span></span>
+                                    : (typeof msg.text === 'string' ? msg.text : String(msg.text || ''))}
+                            </div>
                             {msg.sources && msg.sources.length > 0 && (
                                 <div className="message-sources">
                                     <details>
@@ -162,19 +171,8 @@ function AgentPage() {
                                 </div>
                             )}
                         </div>
-                        {msg.sender === 'user' && <div className="message-avatar user-avatar">😊</div>}
                     </div>
                 ))}
-                {isLoading && (
-                    <div className="message bot">
-                        <div className="message-avatar">😊</div>
-                        <div className="message-content">
-                            <div className="message-bubble typing-indicator">
-                                <span></span><span></span><span></span>
-                            </div>
-                        </div>
-                    </div>
-                )}
                 <div ref={messagesEndRef} />
             </div>
 
